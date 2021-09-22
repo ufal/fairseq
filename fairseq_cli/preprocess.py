@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import sys
+import re
 from collections import Counter
 from itertools import zip_longest
 from multiprocessing import Pool
@@ -45,6 +46,24 @@ def main(args):
 
     task = tasks.get_task(args.task)
 
+    def parse_source_args(args):
+        source_langs = args.source_lang.split(",")
+        args.source_lang = source_langs
+        if args.srcdict:
+            source_dicts = args.srcdict.split(",")
+            if len(source_langs) != len(source_dicts):
+                raise RuntimeError(
+                    "Number of source languages ({}) must match the number of source dictionaries ({}).".format(
+                        len(source_langs), len(source_dicts)))
+            args.srcdict = list(set(source_dicts))
+            dict_index = [args.srcdict.index(d) for d in source_dicts]
+            return dict_index
+        else:
+            source_langs_stripped = [re.sub(r'\d+$', '', lang) for lang in source_langs]
+            args.srcdict_lang = list(set(source_langs_stripped))
+            dict_index = [args.srcdict_lang.index(l) for l in source_langs_stripped]
+            return dict_index
+
     def train_path(lang):
         return "{}{}".format(args.trainpref, ("." + lang) if lang else "")
 
@@ -72,14 +91,18 @@ def main(args):
 
     target = not args.only_source
 
-    if not args.srcdict and os.path.exists(dict_path(args.source_lang)):
-        raise FileExistsError(dict_path(args.source_lang))
+    dict_index = parse_source_args(args)
+
+    if not args.srcdict:
+        for src_lang in args.source_lang:
+            if os.path.exists(dict_path(src_lang)):
+                raise FileExistsError(dict_path(src_lang))
     if target and not args.tgtdict and os.path.exists(dict_path(args.target_lang)):
         raise FileExistsError(dict_path(args.target_lang))
 
     if args.joined_dictionary:
         assert (
-            not args.srcdict or not args.tgtdict
+                not args.srcdict or not args.tgtdict
         ), "cannot use both --srcdict and --tgtdict with --joined-dictionary"
 
         if args.srcdict:
@@ -97,13 +120,16 @@ def main(args):
         tgt_dict = src_dict
     else:
         if args.srcdict:
-            src_dict = task.load_dictionary(args.srcdict)
+            src_dict_uniq = [task.load_dictionary(d) for d in args.srcdict]
         else:
             assert (
                 args.trainpref
             ), "--trainpref must be set if --srcdict is not specified"
-            src_dict = build_dictionary([train_path(args.source_lang)], src=True)
-
+            src_dict_uniq = [
+                build_dictionary({train_path(l) for il, l in enumerate(args.source_lang) if dict_index[il] == dli},
+                                 src=True)
+                for dli, dl in enumerate(args.srcdict_lang)]
+        src_dict = [src_dict_uniq[idx] for idx in dict_index]
         if target:
             if args.tgtdict:
                 tgt_dict = task.load_dictionary(args.tgtdict)
@@ -115,7 +141,12 @@ def main(args):
         else:
             tgt_dict = None
 
-    src_dict.save(dict_path(args.source_lang))
+    for i, d in enumerate(src_dict_uniq):
+        if not args.srcdict:
+            lang = args.srcdict_lang[i]
+        else:
+            lang = args.source_lang[dict_index.index(i)]
+        d.save(dict_path(lang))
     if target and tgt_dict is not None:
         tgt_dict.save(dict_path(args.target_lang))
 
@@ -141,7 +172,7 @@ def main(args):
         if num_workers > 1:
             pool = Pool(processes=num_workers - 1)
             for worker_id, (start_offset, end_offset) in enumerate(
-                more_chunks, start=1
+                    more_chunks, start=1
             ):
                 prefix = "{}{}".format(output_prefix, worker_id)
                 pool.apply_async(
@@ -208,7 +239,7 @@ def main(args):
         if num_workers > 1:
             pool = Pool(processes=num_workers - 1)
             for worker_id, (start_offset, end_offset) in enumerate(
-                more_chunks, start=1
+                    more_chunks, start=1
             ):
                 prefix = "{}{}".format(output_prefix, worker_id)
                 pool.apply_async(
@@ -337,12 +368,12 @@ def main(args):
             align_dict[srcidx] = max(freq_map[srcidx], key=freq_map[srcidx].get)
 
         with open(
-            os.path.join(
-                args.destdir,
-                "alignment.{}-{}.txt".format(args.source_lang, args.target_lang),
-            ),
-            "w",
-            encoding="utf-8",
+                os.path.join(
+                    args.destdir,
+                    "alignment.{}-{}.txt".format(args.source_lang, args.target_lang),
+                ),
+                "w",
+                encoding="utf-8",
         ) as f:
             for k, v in align_dict.items():
                 print("{} {}".format(src_dict[k], tgt_dict[v]), file=f)
