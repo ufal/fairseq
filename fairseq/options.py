@@ -245,7 +245,7 @@ def get_parser(desc, default_task="translation"):
 def add_preprocess_args(parser):
     group = parser.add_argument_group("Preprocessing")
     # fmt: off
-    group.add_argument("-s", "--source-lang", default=None, metavar="SRC",
+    group.add_argument("-s", "--source-lang", nargs="*", default=None, metavar="SRC",
                        help="source language")
     group.add_argument("-t", "--target-lang", default=None, metavar="TARGET",
                        help="target language")
@@ -267,7 +267,7 @@ def add_preprocess_args(parser):
                        help="map words appearing less than threshold times to unknown")
     group.add_argument("--tgtdict", metavar="FP",
                        help="reuse given target dictionary")
-    group.add_argument("--srcdict", metavar="FP",
+    group.add_argument("--srcdict", nargs="*", metavar="FP",
                        help="reuse given source dictionary")
     group.add_argument("--nwordstgt", metavar="N", default=-1, type=int,
                        help="number of target words to retain")

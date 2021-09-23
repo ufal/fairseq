@@ -47,19 +47,16 @@ def main(args):
     task = tasks.get_task(args.task)
 
     def parse_source_args(args):
-        source_langs = args.source_lang.split(",")
-        args.source_lang = source_langs
         if args.srcdict:
-            source_dicts = args.srcdict.split(",")
-            if len(source_langs) != len(source_dicts):
+            if len(args.source_lang) != len(args.srcdict):
                 raise RuntimeError(
                     "Number of source languages ({}) must match the number of source dictionaries ({}).".format(
-                        len(source_langs), len(source_dicts)))
-            args.srcdict = list(set(source_dicts))
-            dict_index = [args.srcdict.index(d) for d in source_dicts]
+                        len(args.source_lang), len(args.srcdict)))
+            args.srcdict_uniq = list(set(args.srcdict))
+            dict_index = [args.srcdict_uniq.index(d) for d in args.srcdict]
             return dict_index
         else:
-            source_langs_stripped = [re.sub(r'\d+$', '', lang) for lang in source_langs]
+            source_langs_stripped = [re.sub(r'\d+$', '', lang) for lang in args.source_lang]
             args.srcdict_lang = list(set(source_langs_stripped))
             dict_index = [args.srcdict_lang.index(l) for l in source_langs_stripped]
             return dict_index
@@ -120,7 +117,7 @@ def main(args):
         tgt_dict = src_dict
     else:
         if args.srcdict:
-            src_dict_uniq = [task.load_dictionary(d) for d in args.srcdict]
+            src_dict_uniq = [task.load_dictionary(d) for d in args.srcdict_uniq]
         else:
             assert (
                 args.trainpref
