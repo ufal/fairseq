@@ -283,7 +283,7 @@ def main(args):
         if args.dataset_impl == "raw":
             # Copy original text file to destination folder
             output_text_file = dest_path(
-                output_prefix + ".{}-{}".format(args.source_lang, args.target_lang),
+                output_prefix + ".{}-{}".format("@".join(args.source_lang), args.target_lang),
                 lang,
             )
             shutil.copyfile(file_name(input_prefix, lang), output_text_file)
@@ -324,7 +324,8 @@ def main(args):
                 num_workers=args.workers,
             )
 
-    make_all(args.source_lang, src_dict)
+    for li, lang in enumerate(args.source_lang):
+        make_all(lang, src_dict[li])
     if target:
         make_all(args.target_lang, tgt_dict)
     if args.align_suffix:
@@ -413,11 +414,11 @@ def binarize_alignments(args, filename, parse_alignment, output_prefix, offset, 
 def dataset_dest_prefix(args, output_prefix, lang):
     base = "{}/{}".format(args.destdir, output_prefix)
     if lang is not None:
-        lang_part = ".{}-{}.{}".format(args.source_lang, args.target_lang, lang)
+        lang_part = ".{}-{}.{}".format("@".join(args.source_lang), args.target_lang, lang)
     elif args.only_source:
         lang_part = ""
     else:
-        lang_part = ".{}-{}".format(args.source_lang, args.target_lang)
+        lang_part = ".{}-{}".format("@".join(args.source_lang), args.target_lang)
 
     return "{}{}".format(base, lang_part)
 
