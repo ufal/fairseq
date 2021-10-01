@@ -46,20 +46,14 @@ def main(args):
 
     task = tasks.get_task(args.task)
 
-    def parse_source_args(args):
-        if args.srcdict:
-            if len(args.source_lang) != len(args.srcdict):
-                raise RuntimeError(
-                    "Number of source languages ({}) must match the number of source dictionaries ({}).".format(
-                        len(args.source_lang), len(args.srcdict)))
-            args.srcdict_uniq = list(set(args.srcdict))
-            dict_index = [args.srcdict_uniq.index(d) for d in args.srcdict]
-            return dict_index
-        else:
-            source_langs_stripped = [re.sub(r'\d+$', '', lang) for lang in args.source_lang]
-            args.srcdict_lang = list(set(source_langs_stripped))
-            dict_index = [args.srcdict_lang.index(l) for l in source_langs_stripped]
-            return dict_index
+    def parse_srcdict_arg(args):
+        if len(args.source_lang) != len(args.srcdict):
+            raise RuntimeError(
+                "Number of source languages ({}) must match the number of source dictionaries ({}).".format(
+                    len(args.source_lang), len(args.srcdict)))
+        srcdict_uniq = list(set(args.srcdict))
+        dict_index = [srcdict_uniq.index(d) for d in args.srcdict]
+        return srcdict_uniq, dict_index
 
     def train_path(lang):
         return "{}{}".format(args.trainpref, ("." + lang) if lang else "")
@@ -67,6 +61,8 @@ def main(args):
     def file_name(prefix, lang):
         fname = prefix
         if lang is not None:
+            if isinstance(lang, list):
+                lang = "@".join(lang)
             fname += ".{lang}".format(lang=lang)
         return fname
 
@@ -88,8 +84,6 @@ def main(args):
 
     target = not args.only_source
 
-    dict_index = parse_source_args(args)
-
     if not args.srcdict:
         for src_lang in args.source_lang:
             if os.path.exists(dict_path(src_lang)):
@@ -99,7 +93,7 @@ def main(args):
 
     if args.joined_dictionary:
         assert (
-                not args.srcdict or not args.tgtdict
+            not (args.srcdict and args.tgtdict)
         ), "cannot use both --srcdict and --tgtdict with --joined-dictionary"
 
         if args.srcdict:
@@ -117,16 +111,15 @@ def main(args):
         tgt_dict = src_dict
     else:
         if args.srcdict:
-            src_dict_uniq = [task.load_dictionary(d) for d in args.srcdict_uniq]
+            srcdict_uniq_paths, dict_index = parse_srcdict_arg(args)
+            src_dict_uniq = [task.load_dictionary(d) for d in srcdict_uniq_paths]
+            src_dict = [src_dict_uniq[idx] for idx in dict_index]
         else:
             assert (
                 args.trainpref
             ), "--trainpref must be set if --srcdict is not specified"
-            src_dict_uniq = [
-                build_dictionary({train_path(l) for il, l in enumerate(args.source_lang) if dict_index[il] == dli},
-                                 src=True)
-                for dli, dl in enumerate(args.srcdict_lang)]
-        src_dict = [src_dict_uniq[idx] for idx in dict_index]
+            src_dict_uniq = [build_dictionary([train_path(l)], src=True) for l in args.source_lang]
+            src_dict = src_dict_uniq
         if target:
             if args.tgtdict:
                 tgt_dict = task.load_dictionary(args.tgtdict)
@@ -139,10 +132,11 @@ def main(args):
             tgt_dict = None
 
     for i, d in enumerate(src_dict_uniq):
-        if not args.srcdict:
-            lang = args.srcdict_lang[i]
+        if args.srcdict:
+            # lang = args.source_lang[dict_index.index(i)]
+            lang = [args.source_lang[li] for li, di in enumerate(dict_index) if di == i]
         else:
-            lang = args.source_lang[dict_index.index(i)]
+            lang = args.source_lang[i]
         d.save(dict_path(lang))
     if target and tgt_dict is not None:
         tgt_dict.save(dict_path(args.target_lang))
