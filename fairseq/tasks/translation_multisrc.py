@@ -40,7 +40,7 @@ def load_langpair_dataset(
     data_path,
     split,
     src,
-    src_dict,
+    src_dicts,
     tgt,
     tgt_dict,
     combine,
@@ -66,40 +66,50 @@ def load_langpair_dataset(
 
     src_datasets = []
     tgt_datasets = []
-
+    src_langs = src.split("@")
+    end=False
     for k in itertools.count():
+        if end:
+            break
         split_k = split + (str(k) if k > 0 else "")
         logger.error("src: {}, tgt:{}, data_path:{}".format(src,tgt,data_path))
         # infer langcode
-        if split_exists(split_k, src, tgt, src, data_path):
-            prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, src, tgt))
-            logger.error(prefix)
-        elif split_exists(split_k, tgt, src, src, data_path):
-            prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, tgt, src))
-            logger.error(prefix)
-        else:
-            if k > 0:
-                break
+        src_datasets_k = []
+        for src_lang,src_dict in zip(src_langs,src_dicts):
+         #   src_datasets_lang = []
+
+            if split_exists(split_k, src, tgt, src_lang, data_path):
+                prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, src, tgt))
+                logger.error(prefix)
+            elif split_exists(split_k, tgt, src, src_lang, data_path):
+                prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, tgt, src))
+                logger.error(prefix)
             else:
-                logger.error(split_k)
+                if k > 0:
+                    end=True
+                    break
+                else:
+                    logger.error(split_k)
 
-                raise FileNotFoundError(
-                    "Dataset not found: {} ({})".format(split, data_path)
-                )
+                    raise FileNotFoundError(
+                        "Dataset not found: {} ({})".format(split, data_path)
+                    )
 
-        src_dataset = data_utils.load_indexed_dataset(
-            prefix + src, src_dict, dataset_impl
-        )
-        if truncate_source:
-            src_dataset = AppendTokenDataset(
-                TruncateDataset(
-                    StripTokenDataset(src_dataset, src_dict.eos()),
-                    max_source_positions - 1,
-                ),
-                src_dict.eos(),
+            src_dataset = data_utils.load_indexed_dataset(
+                prefix + src_lang, src_dict, dataset_impl
             )
-        src_datasets.append(src_dataset)
-
+            if truncate_source:
+                src_dataset = AppendTokenDataset(
+                    TruncateDataset(
+                        StripTokenDataset(src_dataset, src_dict.eos()),
+                        max_source_positions - 1,
+                    ),
+                    src_dict.eos(),
+                )
+            src_datasets_k.append(src_dataset)
+            #src_datasets.append(src_dataset) #TODO
+        src_datasets.append(src_datasets_k)
+        #src_datasets.append(src_datasets_lang)
         tgt_dataset = data_utils.load_indexed_dataset(
             prefix + tgt, tgt_dict, dataset_impl
         )
@@ -108,7 +118,7 @@ def load_langpair_dataset(
 
         logger.info(
             "{} {} {}-{} {} examples".format(
-                data_path, split_k, src, tgt, len(src_datasets[-1])
+                data_path, split_k, src_lang, tgt, len(src_datasets[-1])
             )
         )
 
@@ -117,51 +127,61 @@ def load_langpair_dataset(
 
     assert len(src_datasets) == len(tgt_datasets) or len(tgt_datasets) == 0
 
-    if len(src_datasets) == 1:
-        src_dataset = src_datasets[0]
-        tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
-    else:
-        sample_ratios = [1] * len(src_datasets)
-        sample_ratios[0] = upsample_primary
-        src_dataset = ConcatDataset(src_datasets, sample_ratios)
-        if len(tgt_datasets) > 0:
-            tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
-        else:
-            tgt_dataset = None
+#TODO
 
-    if prepend_bos:
-        assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
-        src_dataset = PrependTokenDataset(src_dataset, src_dict.bos())
-        if tgt_dataset is not None:
-            tgt_dataset = PrependTokenDataset(tgt_dataset, tgt_dict.bos())
-    elif prepend_bos_src is not None:
-        logger.info(f"prepending src bos: {prepend_bos_src}")
-        src_dataset = PrependTokenDataset(src_dataset, prepend_bos_src)
+    # if len(src_datasets) == 1:
+    #     src_dataset = src_datasets[0]
+    #     tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
+    # else:
+    #     sample_ratios = [1] * len(src_datasets)
+    #     sample_ratios[0] = upsample_primary
+    #     src_dataset = ConcatDataset(src_datasets, sample_ratios)
+    #     if len(tgt_datasets) > 0:
+    #         tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
+    #     else:
+    #         tgt_dataset = None
+
+    # if prepend_bos:
+    #     assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
+    #     src_dataset = PrependTokenDataset(src_dataset, src_dict.bos())
+    #     if tgt_dataset is not None:
+    #         tgt_dataset = PrependTokenDataset(tgt_dataset, tgt_dict.bos())
+    # elif prepend_bos_src is not None:
+    #     logger.info(f"prepending src bos: {prepend_bos_src}")
+    #     src_dataset = PrependTokenDataset(src_dataset, prepend_bos_src)
+    logging.info("src datasets in  load_langpair_dataset1: {}".format(src_datasets))
 
     eos = None
     if append_source_id:
-        src_dataset = AppendTokenDataset(
-            src_dataset, src_dict.index("[{}]".format(src))
-        )
-        if tgt_dataset is not None:
-            tgt_dataset = AppendTokenDataset(
-                tgt_dataset, tgt_dict.index("[{}]".format(tgt))
+        new_src_datasets=[]
+        for src_dataset in src_datasets:
+            src_dataset = AppendTokenDataset(
+                 src_dataset, src_dict.index("[{}]".format(src))
             )
+            new_src_datasets.append(src_dataset)
+        src_datasets=new_src_datasets
+        if tgt_dataset is not None:
+            tgt_dataset = AppendTokenDataset(tgt_dataset, tgt_dict.index("[{}]".format(tgt)))
+            tgt_datasets=[tgt_dataset]
         eos = tgt_dict.index("[{}]".format(tgt))
 
     align_dataset = None
-    if load_alignments:
-        align_path = os.path.join(data_path, "{}.align.{}-{}".format(split, src, tgt))
-        if indexed_dataset.dataset_exists(align_path, impl=dataset_impl):
-            align_dataset = data_utils.load_indexed_dataset(
-                align_path, None, dataset_impl
-            )
+    # if load_alignments:
+    #     align_path = os.path.join(data_path, "{}.align.{}-{}".format(split, src, tgt))
+    #     if indexed_dataset.dataset_exists(align_path, impl=dataset_impl):
+    #         align_dataset = data_utils.load_indexed_dataset(
+    #             align_path, None, dataset_impl
+    #         )
+    tgt_dataset=tgt_datasets[0]
+    src_datasets=src_datasets[0]
 
+    print(src_datasets)
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
+    logging.info("src datasets in  load_langpair_dataset: {}".format(src_datasets))
     return LanguagePairDataset(
-        src_dataset,
-        src_dataset.sizes,
-        src_dict,
+        src_datasets,
+        src_datasets[0].sizes,
+        src_dicts,
         tgt_dataset,
         tgt_dataset_sizes,
         tgt_dict,
@@ -199,6 +219,7 @@ class TranslationConfig(FairseqDataclass):
             "argparse_alias": "-t",
         },
     )
+
     load_alignments: bool = field(
         default=False, metadata={"help": "load the binarized alignments"}
     )
@@ -269,8 +290,8 @@ class TranslationConfig(FairseqDataclass):
     )
 
 
-@register_task("translation", dataclass=TranslationConfig)
-class TranslationTask(FairseqTask):
+@register_task("translation_multisrc", dataclass=TranslationConfig)
+class TranslationMultisrcTask(FairseqTask):
     """
     Translate from one (source) language to another (target) language.
 
@@ -310,19 +331,24 @@ class TranslationTask(FairseqTask):
             )
 
         # load dictionaries
-        src_dict = cls.load_dictionary(
-            os.path.join(paths[0], "dict.{}.txt".format(cfg.source_lang))
-        )
         tgt_dict = cls.load_dictionary(
             os.path.join(paths[0], "dict.{}.txt".format(cfg.target_lang))
         )
-        assert src_dict.pad() == tgt_dict.pad()
-        assert src_dict.eos() == tgt_dict.eos()
-        assert src_dict.unk() == tgt_dict.unk()
-        logger.info("[{}] dictionary: {} types".format(cfg.source_lang, len(src_dict)))
         logger.info("[{}] dictionary: {} types".format(cfg.target_lang, len(tgt_dict)))
 
-        return cls(cfg, src_dict, tgt_dict)
+        src_langs=cfg.source_lang.split("@")
+        src_dicts=[]
+
+        for lang in src_langs:
+            src_dict = cls.load_dictionary(
+                os.path.join(paths[0], "dict.{}.txt".format(lang))
+            )
+            logger.info("[{}] dictionary: {} types".format(lang, len(src_dict)))
+            assert src_dict.pad() == tgt_dict.pad()
+            assert src_dict.eos() == tgt_dict.eos()
+            assert src_dict.unk() == tgt_dict.unk()
+            src_dicts.append(src_dict)
+        return cls(cfg, src_dicts, tgt_dict)
 
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):
         """Load a given dataset split.

@@ -1,3 +1,4 @@
+
 # Copyright (c) Facebook Inc. and its affiliates.
 #
 # This source code is licensed under the MIT license found in the
@@ -24,10 +25,12 @@ from .transformer_legacy import (
     transformer_wmt_en_de_big_t2t,
 )
 from .transformer_base import TransformerModelBase, Embedding
+from .transformer_base_multisrc import  TransformerModelBaseMultisrc
 
 
 __all__ = [
     "TransformerModelBase",
+    "TransformerModelBaseMultisrc",
     "TransformerConfig",
     "TransformerDecoder",
     "TransformerDecoderBase",

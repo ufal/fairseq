@@ -19,7 +19,7 @@ from fairseq.models.transformer import (
 from torch import Tensor
 
 
-class TransformerModelBase(FairseqEncoderDecoderModel):
+class TransformerModelBaseMultisrc(FairseqEncoderDecoderModel):
     """
     Transformer model from `"Attention Is All You Need" (Vaswani, et al, 2017)
     <https://arxiv.org/abs/1706.03762>`_.
@@ -64,7 +64,7 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
         if cfg.decoder.layers_to_keep:
             cfg.decoder.layers = len(cfg.decoder.layers_to_keep.split(","))
 
-        src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
+        src_dicts, tgt_dict = task.source_dictionary, task.target_dictionary
 
         if cfg.share_all_embeddings:
             if src_dict != tgt_dict:
@@ -85,15 +85,17 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
             decoder_embed_tokens = encoder_embed_tokens
             cfg.share_decoder_input_output_embed = True
         else:
-            encoder_embed_tokens = cls.build_embedding(
-                cfg, src_dict, cfg.encoder.embed_dim, cfg.encoder.embed_path
-            )
+            encoder_embed_tokens=[]
+            for src_dict in src_dicts:
+                encoder_embed_tokens.append(cls.build_embedding(
+                    cfg, src_dict, cfg.encoder.embed_dim, cfg.encoder.embed_path
+                ))
             decoder_embed_tokens = cls.build_embedding(
                 cfg, tgt_dict, cfg.decoder.embed_dim, cfg.decoder.embed_path
             )
         if cfg.offload_activations:
             cfg.checkpoint_activations = True  # offloading implies checkpointing
-        encoder = cls.build_encoder(cfg, src_dict, encoder_embed_tokens)
+        encoder = cls.build_encoder(cfg, src_dicts, encoder_embed_tokens)
         decoder = cls.build_decoder(cfg, tgt_dict, decoder_embed_tokens)
         if not cfg.share_all_embeddings:
             # fsdp_wrap is a no-op when --ddp-backend != fully_sharded

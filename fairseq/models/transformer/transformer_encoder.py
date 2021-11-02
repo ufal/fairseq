@@ -5,6 +5,7 @@
 
 import math
 from typing import Dict, List, Optional
+import logging
 
 import torch
 import torch.nn as nn
@@ -55,9 +56,9 @@ class TransformerEncoderBase(FairseqEncoder):
             cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
         )
         self.encoder_layerdrop = cfg.encoder.layerdrop
-
         embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
+
         self.max_source_positions = cfg.max_source_positions
 
         self.embed_tokens = embed_tokens
@@ -199,6 +200,9 @@ class TransformerEncoderBase(FairseqEncoder):
                   Only populated if *return_all_hiddens* is True.
         """
         # compute padding mask
+        logging.info("SRC TOKENS IN ENCODER: {}".format(src_tokens))
+        src_tokens=src_tokens[0]# TODO!!!!!
+
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
         has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
 

@@ -37,6 +37,16 @@ def collate(
             pad_to_multiple=pad_to_multiple,
         )
 
+    def merge_multisrc(key,src_idx, left_pad, move_eos_to_beginning=False, pad_to_length=None):
+        return data_utils.collate_tokens(
+            [s[key][src_idx] for s in samples],
+            pad_idx,
+            eos_idx,
+            left_pad,
+            move_eos_to_beginning,
+            pad_to_length=pad_to_length,
+            pad_to_multiple=pad_to_multiple,
+        )
     def check_alignment(alignment, src_len, tgt_len):
         if alignment is None or len(alignment) == 0:
             return False
@@ -65,19 +75,22 @@ def collate(
         return 1.0 / align_weights.float()
 
     id = torch.LongTensor([s["id"] for s in samples])
-    src_tokens = merge(
-        "source",
-        left_pad=left_pad_source,
-        pad_to_length=pad_to_length["source"] if pad_to_length is not None else None,
-    )
-    # sort by descending source length
-    src_lengths = torch.LongTensor(
-        [s["source"].ne(pad_idx).long().sum() for s in samples]
-    )
-    src_lengths, sort_order = src_lengths.sort(descending=True)
-    id = id.index_select(0, sort_order)
-    src_tokens = src_tokens.index_select(0, sort_order)
-
+    src_tokens=[]
+    for src_idx in range(len(samples[0]["source"])): #for multi-source, bad way of getting number of source inputs
+        src_tokens_idx = merge_multisrc(
+            "source",
+            src_idx,
+            left_pad=left_pad_source,
+            pad_to_length=pad_to_length["source"] if pad_to_length is not None else None,
+        )
+        # sort by descending source length
+        src_lengths = torch.LongTensor(
+            [s["source"][src_idx ].ne(pad_idx).long().sum() for s in samples]
+        )
+        src_lengths, sort_order = src_lengths.sort(descending=True)
+        id = id.index_select(0, sort_order)
+        src_tokens_idx = src_tokens_idx.index_select(0, sort_order)
+        src_tokens.append(src_tokens_idx)
     prev_output_tokens = None
     target = None
     if samples[0].get("target", None) is not None:
@@ -203,9 +216,9 @@ class LanguagePairDataset(FairseqDataset):
 
     def __init__(
         self,
-        src,
+        srcs,
         src_sizes,
-        src_dict,
+        src_dicts,
         tgt=None,
         tgt_sizes=None,
         tgt_dict=None,
@@ -225,14 +238,15 @@ class LanguagePairDataset(FairseqDataset):
         pad_to_multiple=1,
     ):
         if tgt_dict is not None:
-            assert src_dict.pad() == tgt_dict.pad()
-            assert src_dict.eos() == tgt_dict.eos()
-            assert src_dict.unk() == tgt_dict.unk()
+            for src_dict in src_dicts:
+                assert src_dict.pad() == tgt_dict.pad()
+                assert src_dict.eos() == tgt_dict.eos()
+                assert src_dict.unk() == tgt_dict.unk()
         if tgt is not None:
-            assert len(src) == len(
+            assert len(srcs[0]) == len(
                 tgt
             ), "Source and target must contain the same number of examples"
-        self.src = src
+        self.srcs = srcs
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
@@ -241,7 +255,7 @@ class LanguagePairDataset(FairseqDataset):
             if self.tgt_sizes is not None
             else self.src_sizes
         )
-        self.src_dict = src_dict
+        self.src_dicts = src_dicts
         self.tgt_dict = tgt_dict
         self.left_pad_source = left_pad_source
         self.left_pad_target = left_pad_target
@@ -261,16 +275,18 @@ class LanguagePairDataset(FairseqDataset):
         self.tgt_lang_id = tgt_lang_id
         if num_buckets > 0:
             from fairseq.data import BucketPadLengthDataset
-
-            self.src = BucketPadLengthDataset(
-                self.src,
-                sizes=self.src_sizes,
-                num_buckets=num_buckets,
-                pad_idx=self.src_dict.pad(),
-                left_pad=self.left_pad_source,
-            )
-            self.src_sizes = self.src.sizes
-            logger.info("bucketing source lengths: {}".format(list(self.src.buckets)))
+            new_srcs=[]
+            for s,src_dict in zip(self.srcs,self.src_dicts):
+                new_srcs.append(BucketPadLengthDataset(
+                   s,
+                    sizes=self.src_sizes,
+                    num_buckets=num_buckets,
+                    pad_idx=src_dict.pad(),
+                    left_pad=self.left_pad_source,
+                ))
+            self.srcs=new_srcs
+            self.src_sizes = self.srcs[0].sizes
+            logger.info("bucketing source lengths: {}".format(list([ s.buckets for s in self.srcs])))
             if self.tgt is not None:
                 self.tgt = BucketPadLengthDataset(
                     self.tgt,
@@ -287,7 +303,7 @@ class LanguagePairDataset(FairseqDataset):
             # determine bucket sizes using self.num_tokens, which will return
             # the padded lengths (thanks to BucketPadLengthDataset)
             num_tokens = np.vectorize(self.num_tokens, otypes=[np.compat.long])
-            self.bucketed_num_tokens = num_tokens(np.arange(len(self.src)))
+            self.bucketed_num_tokens = num_tokens(np.arange(sum([len(s) for s in self.srcs])))
             self.buckets = [
                 (None, num_tokens) for num_tokens in np.unique(self.bucketed_num_tokens)
             ]
@@ -300,33 +316,42 @@ class LanguagePairDataset(FairseqDataset):
 
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
-        src_item = self.src[index]
-        # Append EOS to end of tgt sentence if it does not have an EOS and remove
-        # EOS from end of src sentence if it exists. This is useful when we use
-        # use existing datasets for opposite directions i.e., when we want to
-        # use tgt_dataset as src_dataset and vice versa
-        if self.append_eos_to_target:
-            eos = self.tgt_dict.eos() if self.tgt_dict else self.src_dict.eos()
-            if self.tgt and self.tgt[index][-1] != eos:
-                tgt_item = torch.cat([self.tgt[index], torch.LongTensor([eos])])
+        src_items=[]
+       # logging.info(self.srcs)
+      #  logging.info(self.src_dicts)
 
-        if self.append_bos:
-            bos = self.tgt_dict.bos() if self.tgt_dict else self.src_dict.bos()
-            if self.tgt and self.tgt[index][0] != bos:
-                tgt_item = torch.cat([torch.LongTensor([bos]), self.tgt[index]])
+        for src, src_dict in zip(self.srcs, self.src_dicts):
+        #    logging.info(src)
+         #   logging.info(index)
 
-            bos = self.src_dict.bos()
-            if self.src[index][0] != bos:
-                src_item = torch.cat([torch.LongTensor([bos]), self.src[index]])
+            src_item = src[index]
 
-        if self.remove_eos_from_source:
-            eos = self.src_dict.eos()
-            if self.src[index][-1] == eos:
-                src_item = self.src[index][:-1]
+            # Append EOS to end of tgt sentence if it does not have an EOS and remove
+            # EOS from end of src sentence if it exists. This is useful when we use
+            # use existing datasets for opposite directions i.e., when we want to
+            # use tgt_dataset as src_dataset and vice versa
+            if self.append_eos_to_target:
+                eos = self.tgt_dict.eos() if self.tgt_dict else src_dict.eos()
+                if self.tgt and self.tgt[index][-1] != eos:
+                    tgt_item = torch.cat([self.tgt[index], torch.LongTensor([eos])])
 
+            if self.append_bos:
+                bos = self.tgt_dict.bos() if self.tgt_dict else src_dict.bos()
+                if self.tgt and self.tgt[index][0] != bos:
+                    tgt_item = torch.cat([torch.LongTensor([bos]), self.tgt[index]])
+
+                bos = src_dict.bos()
+                if src[index][0] != bos:
+                    src_item = torch.cat([torch.LongTensor([bos]), src[index]])
+
+            if self.remove_eos_from_source:
+                eos = src_dict.eos()
+                if src[index][-1] == eos:
+                    src_item = src[index][:-1]
+            src_items.append(src_item)
         example = {
             "id": index,
-            "source": src_item,
+            "source": src_items,
             "target": tgt_item,
         }
         if self.align_dataset is not None:
@@ -336,7 +361,7 @@ class LanguagePairDataset(FairseqDataset):
         return example
 
     def __len__(self):
-        return len(self.src)
+        return len(self.srcs[0])
 
     def collater(self, samples, pad_to_length=None):
         """Merge a list of samples to form a mini-batch.
@@ -374,9 +399,19 @@ class LanguagePairDataset(FairseqDataset):
                 - `tgt_lang_id` (LongTensor): a long Tensor which contains target language
                    IDs of each sample in the batch
         """
+        # logging.info("collate samples: {}".format(samples))
+        # for s in samples:
+        #     logging.info("s: {}".format(s))
+        #     for src in s['source']:
+        #         logging.info("src: {}".format(src))
+        #         logging.info("src: {}".format(self.src_dicts[0].string(src)))
+        #     tgt=s["target"]
+        #     logging.info("tgt: {}".format(tgt))
+        #     logging.info("tgt: {}".format(self.tgt_dict.string(tgt)))
+
         res = collate(
             samples,
-            pad_idx=self.src_dict.pad(),
+            pad_idx=self.src_dicts[0].pad(),
             eos_idx=self.eos,
             left_pad_source=self.left_pad_source,
             left_pad_target=self.left_pad_target,

@@ -17,6 +17,7 @@ from fairseq.models.transformer import (
     TransformerConfig,
 )
 from torch import Tensor
+import  logging
 
 
 class TransformerModelBase(FairseqEncoderDecoderModel):
@@ -65,8 +66,10 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
             cfg.decoder.layers = len(cfg.decoder.layers_to_keep.split(","))
 
         src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
-
+        if not isinstance(src_dict,list):#for multisrc, solve better!
+            src_dict=[src_dict]
         if cfg.share_all_embeddings:
+
             if src_dict != tgt_dict:
                 raise ValueError("--share-all-embeddings requires a joined dictionary")
             if cfg.encoder.embed_dim != cfg.decoder.embed_dim:
@@ -85,14 +88,18 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
             decoder_embed_tokens = encoder_embed_tokens
             cfg.share_decoder_input_output_embed = True
         else:
-            encoder_embed_tokens = cls.build_embedding(
-                cfg, src_dict, cfg.encoder.embed_dim, cfg.encoder.embed_path
-            )
+            encoder_embed_tokens=[]
+            for single_dict in src_dict:
+                logging.info("src_dict: {}".format(src_dict))
+                encoder_embed_tokens.append(cls.build_embedding(
+                        cfg, single_dict, cfg.encoder.embed_dim, cfg.encoder.embed_path
+                    ))
             decoder_embed_tokens = cls.build_embedding(
                 cfg, tgt_dict, cfg.decoder.embed_dim, cfg.decoder.embed_path
             )
         if cfg.offload_activations:
             cfg.checkpoint_activations = True  # offloading implies checkpointing
+        encoder_embed_tokens=encoder_embed_tokens[0]#TODO!!!
         encoder = cls.build_encoder(cfg, src_dict, encoder_embed_tokens)
         decoder = cls.build_decoder(cfg, tgt_dict, decoder_embed_tokens)
         if not cfg.share_all_embeddings:
