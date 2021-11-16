@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import gzip
 import typing as tp
 
 
@@ -22,7 +23,11 @@ def find_offsets(filename: str, num_chunks: int) -> tp.List[int]:
     given a file and a number of chuncks, find the offsets in the file
     to be able to chunk around full lines.
     """
-    with open(filename, "r", encoding="utf-8") as f:
+    open_f=open
+    if os.path.exists(filename + ".gz"):
+        open_f = gzip.open
+        filename = filename + ".gz"
+    with open_f(filename, "rt", encoding="utf-8") as f:
         size = os.fstat(f.fileno()).st_size
         chunk_size = size // num_chunks
         offsets = [0 for _ in range(num_chunks + 1)]
@@ -72,12 +77,17 @@ class Chunker:
     """
 
     def __init__(self, path: str, start_offset: int, end_offset: int):
-        self.path = path
+        if os.path.exists(path + ".gz"):
+            self.open = gzip.open
+            self.path = path + ".gz"
+        else:
+            self.open = open
+            self.path = path
         self.start_offset = start_offset
         self.end_offset = end_offset
 
     def __enter__(self) -> ChunkLineIterator:
-        self.fd = open(self.path, "r", encoding="utf-8")
+        self.fd = self.open(self.path, "rt", encoding="utf-8")
         return ChunkLineIterator(self.fd, self.start_offset, self.end_offset)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
