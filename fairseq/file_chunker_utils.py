@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import io
 import gzip
 import typing as tp
 
@@ -28,7 +29,8 @@ def find_offsets(filename: str, num_chunks: int) -> tp.List[int]:
         open_f = gzip.open
         filename = filename + ".gz"
     with open_f(filename, "rt", encoding="utf-8") as f:
-        size = os.fstat(f.fileno()).st_size
+        size = f.seek(0, io.SEEK_END)
+        f.seek(0)
         chunk_size = size // num_chunks
         offsets = [0 for _ in range(num_chunks + 1)]
         for i in range(1, num_chunks):
