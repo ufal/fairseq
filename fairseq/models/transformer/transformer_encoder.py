@@ -9,6 +9,8 @@ import logging
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from fairseq import utils
 from fairseq.distributed import fsdp_wrap
 from fairseq.models import FairseqEncoder
@@ -171,7 +173,7 @@ class TransformerEncoderBase(FairseqEncoder):
     # call the helper function from scriptable Subclass.
     def forward_scriptable(
         self,
-        src_tokens,
+        src_tokens_list,
         src_lengths: Optional[torch.Tensor] = None,
         return_all_hiddens: bool = False,
         token_embeddings: Optional[torch.Tensor] = None,
@@ -200,50 +202,74 @@ class TransformerEncoderBase(FairseqEncoder):
                   Only populated if *return_all_hiddens* is True.
         """
         # compute padding mask
-        logging.info("SRC TOKENS IN ENCODER: {}".format(src_tokens))
-        src_tokens=src_tokens[0]# TODO!!!!!
+        #logging.info("SRC TOKENS IN ENCODER: {}".format(src_tokens_list))
+        #logging.info("SRC TOKENS IN ENCODER: {}".format(src_tokens_list[0].shape))
+        #logging.info("SRC TOKENS IN ENCODER: {}".format(src_tokens_list[1].shape))
 
-        encoder_padding_mask = src_tokens.eq(self.padding_idx)
-        has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
 
-        x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
+        prev_x=None
+        max_encoder_padding_mask=None
+        max_len=[]
 
-        # account for padding while computing the representation
-        if has_pads:
-            x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
+        for i,src_tokens in enumerate(src_tokens_list):
 
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+            encoder_padding_mask = src_tokens.eq(self.padding_idx)
+            has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
+            x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
 
-        encoder_states = []
+            # account for padding while computing the representation
+            if has_pads:
+                x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
 
-        if return_all_hiddens:
-            encoder_states.append(x)
+            # B x T x C -> T x B x C
+            x = x.transpose(0, 1)
 
-        # encoder layers
-        for layer in self.layers:
-            x = layer(
-                x, encoder_padding_mask=encoder_padding_mask if has_pads else None
-            )
+            encoder_states = []
+
             if return_all_hiddens:
-                assert encoder_states is not None
                 encoder_states.append(x)
 
-        if self.layer_norm is not None:
-            x = self.layer_norm(x)
+            # encoder layers
+            # dummy combining function? Just pad to the longer length and sum
+            # or average prev_x over all positions and add to all tokens???
+            if prev_x is not None:
 
-        # The Pytorch Mobile lite interpreter does not supports returning NamedTuple in
-        # `forward` so we use a dictionary instead.
-        # TorchScript does not support mixed values so the values are all lists.
-        # The empty list is equivalent to None.
-        src_lengths = src_tokens.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous()
+                if x.shape[0]>prev_x.shape[0]:
+                    prev_x=F.pad(prev_x,(0,0,0,0,0,x.shape[0]-prev_x.shape[0]))
+                else:
+                    encoder_padding_mask=max_encoder_padding_mask
+                    x=F.pad(x,(0,0,0,0,0,prev_x.shape[0]-x.shape[0]))
+
+                #prev_x=torch.mean(prev_x,0,True) # average over all positions
+
+                x+=prev_x
+            for layer in self.layers:
+                x = layer(
+                    x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                )
+                if return_all_hiddens:
+                    assert encoder_states is not None
+                    encoder_states.append(x)
+
+            if self.layer_norm is not None:
+                x = self.layer_norm(x)
+            prev_x=x
+            # The Pytorch Mobile lite interpreter does not supports returning NamedTuple in
+            # `forward` so we use a dictionary instead.
+            # TorchScript does not support mixed values so the values are all lists.
+            # The empty list is equivalent to None.
+
+            src_lengths = src_tokens.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous()
+            if len(src_lengths)>=len(max_len):
+                max_len=src_lengths
+                max_encoder_padding_mask=encoder_padding_mask
         return {
             "encoder_out": [x],  # T x B x C
-            "encoder_padding_mask": [encoder_padding_mask],  # B x T
+            "encoder_padding_mask": [max_encoder_padding_mask],  # B x T
             "encoder_embedding": [encoder_embedding],  # B x T x C
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": [],
-            "src_lengths": [src_lengths],
+            "src_lengths": [max_len],
         }
 
     @torch.jit.export

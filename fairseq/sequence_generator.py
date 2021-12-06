@@ -201,9 +201,8 @@ class SequenceGenerator(nn.Module):
             ],
         )
         net_input = sample["net_input"]
-
         if "src_tokens" in net_input:
-            src_tokens = net_input["src_tokens"]
+            src_tokens = net_input["src_tokens"][-1]
             # length of the source text being the character length except EndOfSentence and pad
             src_lengths = (
                 (src_tokens.ne(self.eos) & src_tokens.ne(self.pad)).long().sum(dim=1)
