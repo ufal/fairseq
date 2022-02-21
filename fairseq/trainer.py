@@ -674,7 +674,9 @@ class Trainer(object):
         logging_outputs, sample_size, ooms = [], 0, 0
         for i, sample in enumerate(samples):  # delayed update loop
             sample, is_dummy_batch = self._prepare_sample(sample)
-
+            #logging.info("sample:")
+            #logging.info( sample['net_input'] ['src_tokens'])
+            #logging.info(self.task)
             def maybe_no_sync():
                 """
                 Whenever *samples* contains more than one mini-batch, we
@@ -705,6 +707,7 @@ class Trainer(object):
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
                         ignore_grad=is_dummy_batch,
+                        #test="test",
                     )
                     del loss
 

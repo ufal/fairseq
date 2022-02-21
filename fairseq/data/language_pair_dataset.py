@@ -76,6 +76,28 @@ def collate(
 
     id = torch.LongTensor([s["id"] for s in samples])
     src_tokens=[]
+    src_lengths_total=[]
+    for src_idx in range(len(samples[0]["source"])): #for multi-source, bad way of getting number of source inputs
+        #src_tokens_idx = merge_multisrc(
+         #   "source",
+          #  src_idx,
+           # left_pad=left_pad_source,
+           # pad_to_length=pad_to_length["source"] if pad_to_length is not None else None,
+       # )
+        # sort by descending source length
+        # WARNING: sort all srcs the same way
+        src_lengths = torch.LongTensor(
+            [s["source"][src_idx].ne(pad_idx).long().sum() for s in samples]
+        )
+        src_lengths_total.append(src_lengths)
+   #     logging.info("src_lengths")
+    #    logging.info(src_lengths)
+
+    #logging.info("src_lengths_total")
+    src_lengths_total= torch.stack(src_lengths_total, dim=0).sum(dim=0)
+    #logging.info(src_lengths_total)
+    src_lengths, sort_order = src_lengths_total.sort(descending=True)
+    id = id.index_select(0, sort_order)
     for src_idx in range(len(samples[0]["source"])): #for multi-source, bad way of getting number of source inputs
         src_tokens_idx = merge_multisrc(
             "source",
@@ -83,12 +105,6 @@ def collate(
             left_pad=left_pad_source,
             pad_to_length=pad_to_length["source"] if pad_to_length is not None else None,
         )
-        # sort by descending source length
-        src_lengths = torch.LongTensor(
-            [s["source"][src_idx ].ne(pad_idx).long().sum() for s in samples]
-        )
-        src_lengths, sort_order = src_lengths.sort(descending=True)
-        id = id.index_select(0, sort_order)
         src_tokens_idx = src_tokens_idx.index_select(0, sort_order)
         src_tokens.append(src_tokens_idx)
     prev_output_tokens = None
@@ -321,10 +337,14 @@ class LanguagePairDataset(FairseqDataset):
       #  logging.info(self.src_dicts)
 
         for src, src_dict in zip(self.srcs, self.src_dicts):
-        #    logging.info(src)
-         #   logging.info(index)
+        #    logging.info("GET DATASET ITEM")
+         #   logging.info(src)
+          #  logging.info(index)
 
             src_item = src[index]
+           # logging.info(src_item)
+            #logging.info(src_dict.string(src_item))
+            #ok, so here the indexes are ok for both srcs (it returns paraphrases), so the sorting must be done somewhere after here
 
             # Append EOS to end of tgt sentence if it does not have an EOS and remove
             # EOS from end of src sentence if it exists. This is useful when we use
@@ -399,15 +419,15 @@ class LanguagePairDataset(FairseqDataset):
                 - `tgt_lang_id` (LongTensor): a long Tensor which contains target language
                    IDs of each sample in the batch
         """
-        # logging.info("collate samples: {}".format(samples))
-        # for s in samples:
-        #     logging.info("s: {}".format(s))
-        #     for src in s['source']:
-        #         logging.info("src: {}".format(src))
-        #         logging.info("src: {}".format(self.src_dicts[0].string(src)))
-        #     tgt=s["target"]
-        #     logging.info("tgt: {}".format(tgt))
-        #     logging.info("tgt: {}".format(self.tgt_dict.string(tgt)))
+     #   logging.info("collate samples: {}".format(samples))
+     #   for s in samples:
+     #       logging.info("s: {}".format(s))
+     #       for src_dict,src in zip(self.src_dicts,s['source']):
+     #           logging.info("src: {}".format(src))
+     #           logging.info("src: {}".format(src_dict.string(src)))
+     #       tgt=s["target"]
+     #       logging.info("tgt: {}".format(tgt))
+    #        logging.info("tgt: {}".format(self.tgt_dict.string(tgt)))
 
         res = collate(
             samples,
@@ -419,6 +439,16 @@ class LanguagePairDataset(FairseqDataset):
             pad_to_length=pad_to_length,
             pad_to_multiple=self.pad_to_multiple,
         )
+#        logging.info("********************************************************")
+
+ #       logging.info("after collate res:")
+  #      logging.info(res)
+   #     logging.info(self.src_dicts[0].string(res['net_input']['src_tokens'][0]))
+
+    #    logging.info(self.src_dicts[1].string(res['net_input']['src_tokens'][1]))
+     #   logging.info(self.tgt_dict.string(res['target']))
+
+      #  logging.info("********************************************************")
         if self.src_lang_id is not None or self.tgt_lang_id is not None:
             src_tokens = res["net_input"]["src_tokens"]
             bsz = src_tokens.size(0)

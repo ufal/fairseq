@@ -99,7 +99,12 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
             )
         if cfg.offload_activations:
             cfg.checkpoint_activations = True  # offloading implies checkpointing
-        encoder_embed_tokens=encoder_embed_tokens[0]#TODO!!!
+        #encoder_embed_tokens=[encoder_embed_tokens[0]]#TODO!!!
+        logging.info(encoder_embed_tokens)
+        logging.info(encoder_embed_tokens[0])
+        encoder_embed_tokens=nn.ModuleList(encoder_embed_tokens)
+        logging.info(encoder_embed_tokens)
+
         encoder = cls.build_encoder(cfg, src_dict, encoder_embed_tokens)
         decoder = cls.build_decoder(cfg, tgt_dict, decoder_embed_tokens)
         if not cfg.share_all_embeddings:

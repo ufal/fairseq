@@ -271,7 +271,8 @@ class FairseqTask(object):
         # get indices ordered by example size
         with data_utils.numpy_seed(seed):
             indices = dataset.ordered_indices()
-
+        logging.info("Indices")
+        logging.info(indices)
         # filter examples that are too large
         if max_positions is not None:
             indices = self.filter_indices_by_size(
@@ -485,6 +486,12 @@ class FairseqTask(object):
                   gradient
                 - logging outputs to display while training
         """
+       # logging.info("----------------------------------------------------------------------------------")
+       # logging.info(sample)
+       # logging.info(self.source_dictionary[0].string(sample["net_input"]["src_tokens"][0]))
+       # logging.info(self.source_dictionary[1].string(sample["net_input"]["src_tokens"][1]))
+       # logging.info(self.target_dictionary.string(sample["target"]))
+
         model.train()
         model.set_num_updates(update_num)
         with torch.autograd.profiler.record_function("forward"):
@@ -494,6 +501,7 @@ class FairseqTask(object):
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
             optimizer.backward(loss)
+       # exit()
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, criterion):

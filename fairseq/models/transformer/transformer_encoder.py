@@ -21,6 +21,8 @@ from fairseq.modules import (
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,
 )
+from fairseq.modules import LayerNorm, MultiheadAttention
+
 from fairseq.modules import transformer_layer
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
@@ -28,6 +30,8 @@ from torch import Tensor
 from fairseq.models.transformer import (
     TransformerConfig,
 )
+
+
 
 
 # rewrite name for backward compatibility in `make_generation_fast_`
@@ -58,8 +62,8 @@ class TransformerEncoderBase(FairseqEncoder):
             cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__)
         )
         self.encoder_layerdrop = cfg.encoder.layerdrop
-        embed_dim = embed_tokens.embedding_dim
-        self.padding_idx = embed_tokens.padding_idx
+        embed_dim = embed_tokens[0].embedding_dim # TODO!!
+        self.padding_idx = embed_tokens[0].padding_idx
 
         self.max_source_positions = cfg.max_source_positions
 
@@ -95,15 +99,17 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend(
-            [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
-        )
+#        self.layers.extend(
+ #           [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
+  #      )
+        self.layers.extend([self.build_inc_encoder_layer(cfg) for i in range(cfg.encoder.layers)])
         self.num_layers = len(self.layers)
 
         if cfg.encoder.normalize_before:
             self.layer_norm = LayerNorm(embed_dim, export=cfg.export)
         else:
             self.layer_norm = None
+#        self.prev_attn_layer=self.build_inc_encoder_layer(cfg)
 
     def build_encoder_layer(self, cfg):
         layer = transformer_layer.TransformerEncoderLayerBase(cfg)
@@ -117,12 +123,27 @@ class TransformerEncoderBase(FairseqEncoder):
         layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         return layer
 
+    def build_inc_encoder_layer(self, cfg, no_encoder_attn=False):
+        #layer = transformer_layer.TransformerIncEncoderLayerBase(cfg, no_encoder_attn)
+        layer = transformer_layer.TransformerSharedIncEncoderLayerBase(cfg, no_encoder_attn)
+
+        
+        #layer=self.build_encoder_attention(cfg)
+        checkpoint = cfg.checkpoint_activations
+        if checkpoint:
+            offload_to_cpu = cfg.offload_activations
+            layer = checkpoint_wrapper(layer, offload_to_cpu=offload_to_cpu)
+        # if we are checkpointing, enforce that FSDP always wraps the
+        # checkpointed layer, regardless of layer size
+        min_params_to_wrap = cfg.min_params_to_wrap if not checkpoint else 0
+        layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
+        return layer
     def forward_embedding(
-        self, src_tokens, token_embedding: Optional[torch.Tensor] = None
+        self, src_tokens, i,token_embedding: Optional[torch.Tensor] = None
     ):
         # embed tokens and positions
         if token_embedding is None:
-            token_embedding = self.embed_tokens(src_tokens)
+            token_embedding = self.embed_tokens[i](src_tokens)
         x = embed = self.embed_scale * token_embedding
         if self.embed_positions is not None:
             x = embed + self.embed_positions(src_tokens)
@@ -132,6 +153,17 @@ class TransformerEncoderBase(FairseqEncoder):
         if self.quant_noise is not None:
             x = self.quant_noise(x)
         return x, embed
+    def build_encoder_attention(self, cfg):
+        return MultiheadAttention(
+            cfg.decoder.embed_dim,
+            cfg.decoder.attention_heads,
+            kdim=cfg.encoder.embed_dim,
+            vdim=cfg.encoder.embed_dim,
+            dropout=cfg.attention_dropout,
+            encoder_decoder_attention=True,
+            q_noise=cfg.quant_noise.pq,
+            qn_block_size=cfg.quant_noise.pq_block_size,
+        )
 
     def forward(
         self,
@@ -209,19 +241,44 @@ class TransformerEncoderBase(FairseqEncoder):
 
         prev_x=None
         max_encoder_padding_mask=None
-        max_len=[]
+        prev_encoder_padding_mask=None
+        #max_lens=torch.zeros(len(src_tokens_list[0]))
+        #logging.info(max_lens)
+        #for i,src in enumerate(src_tokens_list):
+            #logging.info("src tok len")
+         #   src_lens=src.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous()
+            #logging.info("src lens")
 
-        for i,src_tokens in enumerate(src_tokens_list):
+          #  for k,l in enumerate(src_lens):
+           #     logging.info(l.item())
+            #    max_lens[k]=max(max_lens[k],l.item())
+            #logging.info(src.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous())
+        #logging.info(max_lens)
+        #src_tokens_list=[src_tokens_list[1]]
+        # i should try with 1st random, second correct but .reversed
+        #for i,src_tokens in enumerate(src_tokens_list):
+      #  logging.info("---------------------------------------------------------------------------------------------------")
+        for i, src_tokens in enumerate(src_tokens_list):
 
+        #    logging.info("src_tokens:")
+       #     logging.info(self.dictionary[i].string(src_tokens))
+            #if prev_x is  None:
+           # logging.info("src_tokens:")
+            #logging.info(src_tokens)
             encoder_padding_mask = src_tokens.eq(self.padding_idx)
-            has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
-            x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
-
+            #if not prev_encoder_padding_mask:
+             #   prev_encoder_padding_mask=encoder_padding_mask
+         #   logging.info(encoder_padding_mask)
+            has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()# or True
+            #has_pads=encoder_padding_mask.any()
+            x, encoder_embedding = self.forward_embedding(src_tokens,i)
+            #logging.info(x)
             # account for padding while computing the representation
             if has_pads:
                 x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
-
-            # B x T x C -> T x B x C
+            #logging.info("x masked:")
+            #logging.info(x)
+                # B x T x C -> T x B x C
             x = x.transpose(0, 1)
 
             encoder_states = []
@@ -232,44 +289,60 @@ class TransformerEncoderBase(FairseqEncoder):
             # encoder layers
             # dummy combining function? Just pad to the longer length and sum
             # or average prev_x over all positions and add to all tokens???
-            if prev_x is not None:
-
-                if x.shape[0]>prev_x.shape[0]:
-                    prev_x=F.pad(prev_x,(0,0,0,0,0,x.shape[0]-prev_x.shape[0]))
-                else:
-                    encoder_padding_mask=max_encoder_padding_mask
-                    x=F.pad(x,(0,0,0,0,0,prev_x.shape[0]-x.shape[0]))
-
-                #prev_x=torch.mean(prev_x,0,True) # average over all positions
-
-                x+=prev_x
+            # if prev_x is not None:
+            #
+            #     if x.shape[0]>prev_x.shape[0]:
+            #         prev_x=F.pad(prev_x,(0,0,0,0,0,x.shape[0]-prev_x.shape[0]))
+            #     else:
+            #         encoder_padding_mask=max_encoder_padding_mask
+            #         x=F.pad(x,(0,0,0,0,0,prev_x.shape[0]-x.shape[0]))
+            #
+            #     #prev_x=torch.mean(prev_x,0,True) # average over all positions
+            #
+            #     x+=prev_x
             for layer in self.layers:
-                x = layer(
-                    x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                x, _, _ = layer(
+                    x,
+                    encoder_out=prev_x,
+                    encoder_padding_mask=prev_encoder_padding_mask, #TODO
+                    #do_prev_attn=bool((prev_x!=None)),
+                    need_attn=False,
+                    need_head_weights=False,
+                    self_attn_padding_mask=encoder_padding_mask
                 )
+                #else:
+                   # logging.info("doing self attn")
+
+                #x = layer(
+                 #       x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                  #  )
                 if return_all_hiddens:
                     assert encoder_states is not None
                     encoder_states.append(x)
 
+
+            prev_x=x
+
+            prev_encoder_padding_mask=encoder_padding_mask
             if self.layer_norm is not None:
                 x = self.layer_norm(x)
-            prev_x=x
-            # The Pytorch Mobile lite interpreter does not supports returning NamedTuple in
+            # The Pyto
+            # rch Mobile lite interpreter does not supports returning NamedTuple in
             # `forward` so we use a dictionary instead.
             # TorchScript does not support mixed values so the values are all lists.
             # The empty list is equivalent to None.
 
-            src_lengths = src_tokens.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous()
-            if len(src_lengths)>=len(max_len):
-                max_len=src_lengths
-                max_encoder_padding_mask=encoder_padding_mask
+#            src_lengths = src_tokens.ne(self.padding_idx).sum(dim=1, dtype=torch.int32).reshape(-1, 1).contiguous()
+ #           if len(src_lengths)>=len(max_len):
+  #              max_len=src_lengths
+   #             max_encoder_padding_mask=encoder_padding_mask
         return {
             "encoder_out": [x],  # T x B x C
-            "encoder_padding_mask": [max_encoder_padding_mask],  # B x T
+            "encoder_padding_mask": [encoder_padding_mask],  # B x T
             "encoder_embedding": [encoder_embedding],  # B x T x C
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": [],
-            "src_lengths": [max_len],
+            "src_lengths": [src_lengths],
         }
 
     @torch.jit.export

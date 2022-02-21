@@ -178,9 +178,18 @@ def load_langpair_dataset(
     print(src_datasets)
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     logging.info("src datasets in  load_langpair_dataset: {}".format(src_datasets))
+    #for src_dataset in src_datasets:
+     #   logging.info(src_dataset.sizes)
+    #get total lengths of the examples, batches are created based on this???
+    src_sizes=[s1+s2 for s1,s2 in zip(src_datasets[0].sizes,src_datasets[1].sizes)]
+    #logging.info(src_datasets[0].sizes)
+    #logging.info(src_datasets[1].sizes)
+    #logging.info(src_sizes)
+
+    #exit()
     return LanguagePairDataset(
         src_datasets,
-        src_datasets[0].sizes,
+        src_sizes,
         src_dicts,
         tgt_dataset,
         tgt_dataset_sizes,
