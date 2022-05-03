@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import sys
+import re
 from collections import Counter
 from itertools import zip_longest
 from multiprocessing import Pool
@@ -45,12 +46,23 @@ def main(args):
 
     task = tasks.get_task(args.task)
 
+    def parse_srcdict_arg(args):
+        if len(args.source_lang) != len(args.srcdict):
+            raise RuntimeError(
+                "Number of source languages ({}) must match the number of source dictionaries ({}).".format(
+                    len(args.source_lang), len(args.srcdict)))
+        srcdict_uniq = list(set(args.srcdict))
+        dict_index = [srcdict_uniq.index(d) for d in args.srcdict]
+        return srcdict_uniq, dict_index
+
     def train_path(lang):
         return "{}{}".format(args.trainpref, ("." + lang) if lang else "")
 
     def file_name(prefix, lang):
         fname = prefix
         if lang is not None:
+            if isinstance(lang, list):
+                lang = "@".join(lang)
             fname += ".{lang}".format(lang=lang)
         return fname
 
@@ -72,14 +84,16 @@ def main(args):
 
     target = not args.only_source
 
-    if not args.srcdict and os.path.exists(dict_path(args.source_lang)):
-        raise FileExistsError(dict_path(args.source_lang))
+    if not args.srcdict:
+        for src_lang in args.source_lang:
+            if os.path.exists(dict_path(src_lang)):
+                raise FileExistsError(dict_path(src_lang))
     if target and not args.tgtdict and os.path.exists(dict_path(args.target_lang)):
         raise FileExistsError(dict_path(args.target_lang))
 
     if args.joined_dictionary:
         assert (
-            not args.srcdict or not args.tgtdict
+            not (args.srcdict and args.tgtdict)
         ), "cannot use both --srcdict and --tgtdict with --joined-dictionary"
 
         if args.srcdict:
@@ -97,13 +111,15 @@ def main(args):
         tgt_dict = src_dict
     else:
         if args.srcdict:
-            src_dict = task.load_dictionary(args.srcdict)
+            srcdict_uniq_paths, dict_index = parse_srcdict_arg(args)
+            src_dict_uniq = [task.load_dictionary(d) for d in srcdict_uniq_paths]
+            src_dict = [src_dict_uniq[idx] for idx in dict_index]
         else:
             assert (
                 args.trainpref
             ), "--trainpref must be set if --srcdict is not specified"
-            src_dict = build_dictionary([train_path(args.source_lang)], src=True)
-
+            src_dict_uniq = [build_dictionary([train_path(l)], src=True) for l in args.source_lang]
+            src_dict = src_dict_uniq
         if target:
             if args.tgtdict:
                 tgt_dict = task.load_dictionary(args.tgtdict)
@@ -115,7 +131,13 @@ def main(args):
         else:
             tgt_dict = None
 
-    src_dict.save(dict_path(args.source_lang))
+    for i, d in enumerate(src_dict_uniq):
+        if args.srcdict:
+            # lang = args.source_lang[dict_index.index(i)]
+            lang = [args.source_lang[li] for li, di in enumerate(dict_index) if di == i]
+        else:
+            lang = args.source_lang[i]
+        d.save(dict_path(lang))
     if target and tgt_dict is not None:
         tgt_dict.save(dict_path(args.target_lang))
 
@@ -141,7 +163,7 @@ def main(args):
         if num_workers > 1:
             pool = Pool(processes=num_workers - 1)
             for worker_id, (start_offset, end_offset) in enumerate(
-                more_chunks, start=1
+                    more_chunks, start=1
             ):
                 prefix = "{}{}".format(output_prefix, worker_id)
                 pool.apply_async(
@@ -208,7 +230,7 @@ def main(args):
         if num_workers > 1:
             pool = Pool(processes=num_workers - 1)
             for worker_id, (start_offset, end_offset) in enumerate(
-                more_chunks, start=1
+                    more_chunks, start=1
             ):
                 prefix = "{}{}".format(output_prefix, worker_id)
                 pool.apply_async(
@@ -255,7 +277,7 @@ def main(args):
         if args.dataset_impl == "raw":
             # Copy original text file to destination folder
             output_text_file = dest_path(
-                output_prefix + ".{}-{}".format(args.source_lang, args.target_lang),
+                output_prefix + ".{}-{}".format("@".join(args.source_lang), args.target_lang),
                 lang,
             )
             shutil.copyfile(file_name(input_prefix, lang), output_text_file)
@@ -296,7 +318,8 @@ def main(args):
                 num_workers=args.workers,
             )
 
-    make_all(args.source_lang, src_dict)
+    for li, lang in enumerate(args.source_lang):
+        make_all(lang, src_dict[li])
     if target:
         make_all(args.target_lang, tgt_dict)
     if args.align_suffix:
@@ -337,12 +360,12 @@ def main(args):
             align_dict[srcidx] = max(freq_map[srcidx], key=freq_map[srcidx].get)
 
         with open(
-            os.path.join(
-                args.destdir,
-                "alignment.{}-{}.txt".format(args.source_lang, args.target_lang),
-            ),
-            "w",
-            encoding="utf-8",
+                os.path.join(
+                    args.destdir,
+                    "alignment.{}-{}.txt".format(args.source_lang, args.target_lang),
+                ),
+                "w",
+                encoding="utf-8",
         ) as f:
             for k, v in align_dict.items():
                 print("{} {}".format(src_dict[k], tgt_dict[v]), file=f)
@@ -385,11 +408,11 @@ def binarize_alignments(args, filename, parse_alignment, output_prefix, offset, 
 def dataset_dest_prefix(args, output_prefix, lang):
     base = "{}/{}".format(args.destdir, output_prefix)
     if lang is not None:
-        lang_part = ".{}-{}.{}".format(args.source_lang, args.target_lang, lang)
+        lang_part = ".{}-{}.{}".format("@".join(args.source_lang), args.target_lang, lang)
     elif args.only_source:
         lang_part = ""
     else:
-        lang_part = ".{}-{}".format(args.source_lang, args.target_lang)
+        lang_part = ".{}-{}".format("@".join(args.source_lang), args.target_lang)
 
     return "{}{}".format(base, lang_part)
 
